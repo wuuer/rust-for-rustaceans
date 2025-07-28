@@ -68,9 +68,9 @@ trait Future {
   按照我之前描述的方式编写一个实现 `Future` 的类型相当麻烦。要了解原因，首先看一下示例 8-3 中相当简单的异步代码块，它只是尝试将消息从输入通道 rx 转发到输出通道 tx。
 ```rust
 async fn forward<T>(rx: Receiver<T>, tx: Sender<T>) {
- while let Some(t) = rx.next().await {
- tx.send(t).await;
- }
+    while let Some(t) = rx.next().await {
+        tx.send(t).await;
+    }
 }
 
 // 示例 8-3：使用 async 和 await 实现通道转发 Future
@@ -78,42 +78,45 @@ async fn forward<T>(rx: Receiver<T>, tx: Sender<T>) {
 
   这段代码使用了 `async` 和 `await` 语法编写，看起来与对应的同步代码非常相似，并且易于阅读。我们只需循环发送收到的每条消息，直到没有消息为止，每个 `await` 点都对应一个同步变量可能阻塞的位置。现在，想象一下，如果您必须通过手动实现 `Future trait` 来表达这段代码会怎样。由于每次调用 `poll` 都从函数顶部开始，因此您需要打包必要的状态，以便从代码最后返回的位置继续执行。结果会相当糟糕，如示例 8-4 所示。
 ```rust
-enum Forward<T> { // 1
- WaitingForReceive(ReceiveFuture<T>, Option<Sender<T>>),
- WaitingForSend(SendFuture<T>, Option<Receiver<T>>),
+enum Forward<T> {
+    // 1
+    WaitingForReceive(ReceiveFuture<T>, Option<Sender<T>>),
+    WaitingForSend(SendFuture<T>, Option<Receiver<T>>),
 }
 impl<T> Future for Forward<T> {
- type Output = ();// 2
- fn poll(&mut self) -> Poll<Self::Output> {
- match self { // 3
- Forward::WaitingForReceive(recv, tx) => {
- if let Poll::Ready((rx, v)) = recv.poll() {
- if let Some(v) = v {
- let tx = tx.take().unwrap(); // 4
- *self = Forward::WaitingForSend(tx.send(v), Some(rx)); // 5
- // Try to make progress on sending.
- return self.poll(); // 6
- } else {
- // No more items.
- Poll::Ready(())
- }
- } else {
- Poll::Pending
- }
- }
- Forward::WaitingForSend(send, rx) => {
- if let Poll::Ready(tx) = send.poll() {
- let rx = rx.take().unwrap();
- *self = Forward::WaitingForReceive(rx.receive(), Some(tx));
- // Try to make progress on receiving.
- return self.poll();
- } else {
- Poll::Pending
- }
- }
- }
- }
+    type Output = (); // 2
+    fn poll(&mut self) -> Poll<Self::Output> {
+        match self {
+            // 3
+            Forward::WaitingForReceive(recv, tx) => {
+                if let Poll::Ready((rx, v)) = recv.poll() {
+                    if let Some(v) = v {
+                        let tx = tx.take().unwrap(); // 4
+                        *self = Forward::WaitingForSend(tx.send(v), Some(rx)); // 5
+                        // Try to make progress on sending.
+                        return self.poll(); // 6
+                    } else {
+                        // No more items.
+                        Poll::Ready(())
+                    }
+                } else {
+                    Poll::Pending
+                }
+            }
+            Forward::WaitingForSend(send, rx) => {
+                if let Poll::Ready(tx) = send.poll() {
+                    let rx = rx.take().unwrap();
+                    *self = Forward::WaitingForReceive(rx.receive(), Some(tx));
+                    // Try to make progress on receiving.
+                    return self.poll();
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+    }
 }
+
 
 // 清单 8-4：手动实现通道转发 Future
 ```
